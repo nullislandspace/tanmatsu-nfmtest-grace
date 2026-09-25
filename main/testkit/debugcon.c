@@ -43,6 +43,7 @@ typedef struct {
 
 static QueueHandle_t              s_queue;
 static volatile bool              s_busy;
+static volatile bool              s_ack;
 static debugcon_identity_t const* s_id;
 
 // The host matches "git" against the build it expects, so a stale app on
@@ -63,6 +64,10 @@ static void handle_line(char const* line) {
     if (line[0] == '\0') return;
     if (strcmp(line, "PING") == 0) {
         debugcon_hello("PONG");
+        return;
+    }
+    if (strcmp(line, "ACK") == 0) {
+        s_ack = true;
         return;
     }
     if (strncmp(line, "RUN ", 4) == 0 || strcmp(line, "EXIT") == 0 || strcmp(line, "BADGELINK") == 0) {
@@ -135,4 +140,10 @@ bool debugcon_poll(char out[DEBUGCON_LINE_MAX]) {
 
 void debugcon_set_busy(bool busy) {
     s_busy = busy;
+}
+
+bool debugcon_take_ack(void) {
+    bool const ack = s_ack;
+    s_ack          = false;
+    return ack;
 }

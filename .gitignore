@@ -10,3 +10,5 @@ CLAUDE.md
 badgelink
 esp-idf-tools
 esp-idf
+build-host/
+__pycache__/

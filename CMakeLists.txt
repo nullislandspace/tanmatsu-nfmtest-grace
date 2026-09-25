@@ -11,27 +11,64 @@ project(app C)
 set(APP_SOURCES
     main/main.c
     main/crt0.c
+    main/nfm/netraw.c
+    main/nfm/usbnet.c
+    main/nfm/ncmtest.c
 )
 
-# Automated device tests (main/testkit/, README "Automated device tests").
-# Opt-in: uncomment to build them in, and set where shots go. An app
-# without SynthEngine3D adds TESTKIT_NO_ENGINE to the definitions.
-# list(APPEND APP_SOURCES
-#     main/testkit/debugcon.c
-#     main/testkit/devtest.c
-#     main/testkit/profile.c
-#     main/testkit/report.c
-#     main/testkit/screenshot.c
-#     main/testkit/showtime.c
-# )
-# add_compile_definitions(SCREENSHOT_DIR="/sd/myapp")
+# The test kit's console half (main/testkit/, README "Automated device
+# tests"): the listener and the record format. nfmtest drives its own
+# test (RUN ncm, main/nfm/ncmtest.h) rather than the kit's perf/shots.
+list(APPEND APP_SOURCES
+    main/testkit/debugcon.c
+    main/testkit/report.c
+)
+add_compile_definitions(REPORT_PREFIX="NFM" TESTKIT_NO_ENGINE SCREENSHOT_DIR="/sd/nfmtest")
+
+# Build identity for the debug console's READY records: the git commit
+# (marked -dirty when there are uncommitted changes) and the build time.
+# `make build` re-runs cmake, so this is fresh on every build. Without it
+# the app reports "unknown" and tools/testrun.py refuses to believe any
+# result, on the grounds that it cannot tell which build produced it.
+execute_process(
+    COMMAND git describe --always --dirty --abbrev=10
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    OUTPUT_VARIABLE APP_GIT_HASH
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+if(NOT APP_GIT_HASH)
+    set(APP_GIT_HASH "unknown")
+endif()
+string(TIMESTAMP APP_BUILD_TIME "%Y-%m-%dT%H:%M:%SZ" UTC)
+configure_file(main/app_version.h.in ${CMAKE_CURRENT_BINARY_DIR}/generated/app_version.h @ONLY)
 
 # Include directories — add paths to your headers here
 set(APP_INCLUDES
     main
+    main/testkit
+    components
+    components/tinyusb/src
     include
     include/esp_additions/include
+    ${CMAKE_CURRENT_BINARY_DIR}/generated
 )
+
+# TinyUSB, vendored (components/tinyusb/PROVENANCE.md): device core,
+# CDC-NCM and the DWC2 port, configured by components/tusb_config.h.
+# Compiled into app.so like the app (F-02/F-08), with its own warning set:
+# it is upstream code, kept byte-identical.
+set(TINYUSB_SOURCES
+    components/tinyusb/src/tusb.c
+    components/tinyusb/src/common/tusb_fifo.c
+    components/tinyusb/src/device/usbd.c
+    components/tinyusb/src/class/net/ncm_device.c
+    components/tinyusb/src/portable/synopsys/dwc2/dcd_dwc2.c
+    components/tinyusb/src/portable/synopsys/dwc2/dwc2_common.c
+)
+list(APPEND APP_SOURCES ${TINYUSB_SOURCES})
+set_source_files_properties(${TINYUSB_SOURCES} PROPERTIES
+    COMPILE_OPTIONS "-Wno-unused-parameter;-Wno-sign-compare;-Wno-type-limits;-Wno-missing-field-initializers")
 
 # Compile app sources as a relocatable object library
 add_library(app_obj OBJECT ${APP_SOURCES})

@@ -4,7 +4,7 @@ BADGELINKPORT ?= $(PORT)
 SHELL := /usr/bin/env bash
 
 # App installation settings
-APP_SLUG_NAME ?= tld.username.gracetemplate
+APP_SLUG_NAME ?= at.cavac.nfmtest
 APP_INSTALL_BASE_PATH ?= /int/apps/
 APP_INSTALL_PATH = $(APP_INSTALL_BASE_PATH)$(APP_SLUG_NAME)
 
@@ -87,6 +87,30 @@ testcompare:
 
 recover:
 	source "$(IDF_SOURCE)" >/dev/null && python3 tools/recover.py --port "$(PORT)"
+
+# nfmtest's own test: the USB-C port as a network adapter (main/nfm/ncmtest.h).
+# The console is away for the length of the run; tools/nfmrun.py does the
+# round trip (RUN -> network side -> console back -> records -> ACK).
+#
+#   make nfmrun   NFM="mode=blast secs=30"   the app must be running
+#   make nfmcycle NFM="mode=idle secs=60"    build, install, run, test
+#   make tscheck                             host tests (netraw), no badge
+NFM ?= mode=blast secs=30
+NFMFLAGS ?=
+
+.PHONY: nfmrun nfmcycle tscheck
+nfmrun:
+	source "$(IDF_SOURCE)" >/dev/null && \
+	python3 -u tools/nfmrun.py --port "$(PORT)" $(NFMFLAGS) -- $(NFM)
+
+nfmcycle: build install run
+	$(MAKE) nfmrun
+
+tscheck:
+	mkdir -p build-host
+	gcc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined \
+	    -o build-host/tscheck tools/tscheck.c main/nfm/netraw.c
+	./build-host/tscheck
 
 # Badgelink
 .PHONY: badgelink
@@ -215,7 +239,7 @@ verify: build
 
 .PHONY: clean
 clean:
-	rm -rf $(BUILD)
+	rm -rf $(BUILD) build-host
 
 .PHONY: fullclean
 fullclean: clean

@@ -1,7 +1,9 @@
 {
-  "name": "Grace Template",
-  "description": "Template app using Graceloader",
-  "categories": ["tools"],
+  "name": "NFM Test",
+  "description": "Measures USB-C networking (CDC-NCM) and, later, H.264 screen streaming",
+  "categories": [
+    "tools"
+  ],
   "version": "0.1.0",
   "icon": {
     "16x16": "icon16.png",
@@ -12,13 +14,19 @@
   "license_type": "MIT",
   "application": [
     {
-      "targets": ["tanmatsu", "konsool"],
+      "targets": [
+        "tanmatsu",
+        "konsool"
+      ],
       "revision": 2,
       "type": "script",
       "interpreter": "at.cavac.graceloader",
       "executable": "app.so",
       "assets": [
-        {"source_file": "app.so", "target_file": "app.so"}
+        {
+          "source_file": "app.so",
+          "target_file": "app.so"
+        }
       ]
     }
   ]

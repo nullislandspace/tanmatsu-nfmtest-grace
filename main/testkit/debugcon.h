@@ -12,6 +12,8 @@
 //  Commands:
 //    PING              answered with a PONG record by the listener
 //    RUN <test> [k=v]  queued for the main loop (devtest.h)
+//    ACK               the host has the records a test repeats after the
+//                      console was away (nfmtest); debugcon_take_ack()
 //    EXIT              queued: return to the launcher
 //    BADGELINK         queued, same as EXIT. The host sends this to ask
 //                      the LAUNCHER for BadgeLink mode; if the app is
@@ -58,3 +60,6 @@ void debugcon_set_busy(bool busy);
 
 // Emit the identity record (READY / PONG / HELLO share their fields).
 void debugcon_hello(char const* kind);
+
+// True once after the host sent ACK (clears it).
+bool debugcon_take_ack(void);

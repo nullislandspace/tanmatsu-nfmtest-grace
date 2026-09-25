@@ -466,7 +466,8 @@ main/nfm/tsmux.c|h           MPEG-TS muxer (host-buildable, no ESP headers)
 main/nfm/tx.h                transport interface (Part C)
 main/nfm/tx_null.c tx_sd.c tx_ncm_raw.c tx_ncm_lwip.c tx_wifi.c
 main/nfm/usbnet.c|h          TinyUSB NCM device, PHY switch there and back
-main/nfm/netraw.c|h          Ethernet/ARP/IPv4/ICMP/UDP for ncm_raw (host-buildable)
+main/nfm/netraw.c|h          Ethernet/ARP/IPv4/ICMP/UDP/DHCP for ncm_raw (host-buildable)
+main/nfm/ncmtest.c|h         RUN ncm: the link alone, UDP blast (steps 1.3/1.4, 4.2, T5a)
 main/measure/stagetime.c|h   M1.1
 main/measure/cpuload.c|h     M1.2 soak tasks
 main/measure/cachecnt.c|h    M2.2 L2 counters
@@ -477,6 +478,7 @@ components/esp_h264/         vendored subset: interface/, hw/, port/ (no sw/ lib
 components/tinyusb/          vendored subset: src/ core + class/net + portable/synopsys/dwc2, provenance + version
 components/tusb_config.h     hand-written (F-08)
 tools/nfmrecv.py             PC receiver, M4
+tools/nfmrun.py              hands-free round trip: RUN -> network side -> console back -> ACK
 tools/tscheck.c              host test for tsmux.c + netraw.c
 tools/setup_host_ncm.sh      NetworkManager profile for the badge's MAC
 claudeplans/nfmtest.md       this file
@@ -495,13 +497,14 @@ claudeplans/nfmtest.md       this file
 | **0** | **Setup** | | |
 | 0.1 | Clone `tanmatsu-template-grace` as `tanmatsu-nfmtest-grace`; `upstream` = template, `origin` = `nullislandspace/tanmatsu-nfmtest-grace` | done | 2026-09-25, at template `0c62ac4` (graceloader 2.6.0 symbols). The GitHub repo exists and is empty; nothing pushed yet. |
 | 0.2 | This plan | done | 2026-09-25 |
-| 0.3 | Identity: `APP_SLUG_NAME ?= at.cavac.nfmtest`, `metadata.json` (name "NFM Test", category tools), README intro; testkit enabled with `TESTKIT_NO_ENGINE`, `REPORT_PREFIX="NFM"`, `SCREENSHOT_DIR="/sd/nfmtest"`; build, install, run, `make cycle TEST="perf secs=5"` passes | todo | |
-| 0.4 | First push to `origin` | todo | When the user says so. |
+| 0.3 | Identity: `APP_SLUG_NAME ?= at.cavac.nfmtest`, `metadata.json` (name "NFM Test", category tools), README intro; testkit enabled with `TESTKIT_NO_ENGINE`, `REPORT_PREFIX="NFM"`, `SCREENSHOT_DIR="/sd/nfmtest"`; build, install, run, `make cycle TEST="perf secs=5"` passes | in progress | 2026-09-25: slug, metadata, README, `REPORT_PREFIX="NFM"`, build id (`app_version.h`) done; only the testkit's console half (`debugcon`, `report`) is built in, since nfmtest runs its own test (`RUN ncm`) rather than perf/shots. Builds, `make verify` clean. Not yet run on hardware. |
+| 0.4 | First push to `origin` | done | The plan commit was on `origin` already; the USB-NCM work was pushed 2026-09-25 when the user asked. |
 | **1** | **Spikes: can each piece live in a grace app at all?** | | Small and throwaway, one question each; results become findings. |
+| 1.0 | **Next: first hardware test** of 1.3/1.4/4.2/4.3 (the user, evening of 2026-09-25): press `I` on the badge (link only): `enx…` appears in dmesg, gets 192.168.77.1, `ping 192.168.77.2` works. Enter (blast) + `tools/nfmrecv.py --ping --echo 50`. `/dev/ttyACM0` comes back afterwards. A second run in the same session works. Then `make nfmcycle`. | todo | Everything touching USB hardware is written blind; see the README for what to check if it fails. |
 | 1.1 | Vendor the esp_h264 HW encoder (interface/, hw/, port/) from the version the camera uses, build it `-fPIC` into app.so; open an 800×480 encoder, encode one flat frame, close | todo | Check that it links (only source, F-02) and that the ISR fires from PSRAM code (F-03). **Ledger:** SRAM before/after open, per allocation (F-04). Check whether the H.264 DMA collides with the PPA's 2D-DMA channels. |
 | 1.2 | PPA SRM: the raw 480×800 RGB565 framebuffer → 800×480 YUV420 with 90° rotation (or 270°, whichever makes it upright), 1:1 scale; encode that; write `.h264` to SD; decode on the PC and compare with a PNG screenshot of the same frame | todo | Also check colour range and standard (BT.601 limited, as the camera does). The even-scale mask (F-10) is irrelevant at 1:1; confirm. |
-| 1.3 | Vendor TinyUSB (core, class/net NCM, dwc2 port); hand-written `tusb_config.h`; PHY switch to OTG; enumerate as NCM; `ip link` on the PC shows `enx…` with the expected MAC | todo | **Decision D-12:** DWC2 slave (FIFO) mode first, because the app's static buffers are in PSRAM (F-09). Try DMA mode with `heap_caps` internal buffers only if slave-mode CPU cost (T5a) is too high. |
-| 1.4 | The way back: stop TinyUSB, free the PHY, `usb_serial_jtag_ll_phy_select(0)`, pull-up; the console answers `PING` again; the app exits to the launcher cleanly | todo | Also: what does a crash in OTG mode leave behind? It should be a reboot with USJ back. Confirm, and note how `make recover` behaves. |
+| 1.3 | Vendor TinyUSB (core, class/net NCM, dwc2 port); hand-written `tusb_config.h`; PHY switch to OTG; enumerate as NCM; `ip link` on the PC shows `enx…` with the expected MAC | in progress (built, untested on hardware) | 2026-09-25, written blind: TinyUSB 0.21.0 from the launcher (`components/tinyusb/PROVENANCE.md`), `components/tusb_config.h`, `main/nfm/usbnet.c`. Links against graceloader 2.6.0 with nothing missing. F-14..F-17. | **Decision D-12:** DWC2 slave (FIFO) mode first, because the app's static buffers are in PSRAM (F-09). Try DMA mode with `heap_caps` internal buffers only if slave-mode CPU cost (T5a) is too high. |
+| 1.4 | The way back: stop TinyUSB, free the PHY, `usb_serial_jtag_ll_phy_select(0)`, pull-up; the console answers `PING` again; the app exits to the launcher cleanly | in progress (built, untested on hardware) | `usbnet_stop()`: `tud_disconnect`, `tusb_deinit`, `usb_del_phy`, PHY back. Also to check: a second run in the same app session (keyboard) re-inits TinyUSB cleanly. | Also: what does a crash in OTG mode leave behind? It should be a reboot with USJ back. Confirm, and note how `make recover` behaves. |
 | **2** | **Pipeline, `null` and `sd` transports** | | |
 | 2.1 | `present.c`: three driver framebuffers, flip as in `se_run.c`; `pattern.c` with all five patterns; `load.c` with L0/L1 | todo | Patterns are pure f(frame) (host check: same frame, same hash). |
 | 2.2 | `capture.c`: PPA non-blocking into `yuv[2]`, the capture point after the present's select; drop instead of wait (Part B) | todo | |
@@ -518,10 +521,10 @@ claudeplans/nfmtest.md       this file
 | 3.7 | `load.c` L2 synthetic renderer; check `L2:4` against SynthMiner's measured per-frame PSRAM traffic (its `PERF` records) and adjust the default | todo | |
 | 3.8 | Run **T0, T1, T2, T3**; findings | todo | The first real numbers: encoder cost with no USB in the picture. |
 | **4** | **Raw NCM** | | |
-| 4.1 | `netraw.c`: Ethernet, ARP reply, IPv4, ICMP echo, UDP send, learn the PC's MAC; host-tested in `tscheck` with captured frames | todo | |
-| 4.2 | `tx_ncm_raw` over `usbnet`; `tools/setup_host_ncm.sh`; `ping 192.168.77.2` works | todo | |
-| 4.3 | **T5a**, the USB ceiling | todo | Q5; decides the bitrate range for T5. |
-| 4.4 | `tools/nfmrecv.py` (M4) and the harness round trip of Part T (START → PHY away → receive → PHY back → final records → merge) in `testrun.py`; `make cycle TEST="nfm tx=ncm_raw …"` is hands-free | todo | |
+| 4.1 | `netraw.c`: Ethernet, ARP reply, IPv4, ICMP echo, UDP send, learn the PC's MAC; host-tested in `tscheck` with captured frames | done | 2026-09-25. Plus a one-lease DHCP server and UDP echo on port 7 (D-15). `make tscheck` passes (ASan/UBSan), and `tscheck --pcap` output decodes cleanly in tcpdump (ARP, ICMP, DHCP OFFER/ACK/NAK, UDP): a check against an independent parser, not only against our own reading of the RFCs. |
+| 4.2 | `tx_ncm_raw` over `usbnet`; `tools/setup_host_ncm.sh`; `ping 192.168.77.2` works | in progress (built, untested on hardware) | `usbnet_send_udp()` + ring for now; the `nfm_tx_t` wrapper comes with the stream (2.5). `setup_host_ncm.sh` is only the fallback now (D-15). |
+| 4.3 | **T5a**, the USB ceiling | in progress (ready to run) | Q5; decides the bitrate range for T5. `RUN ncm mode=blast [rate=<kbit/s>] [len=…]`, `main/nfm/ncmtest.c`. CPU for now is the usbnet task's own busy time only (no ISR time); the soak method (3.2) comes later. |
+| 4.4 | `tools/nfmrecv.py` (M4) and the harness round trip of Part T (START → PHY away → receive → PHY back → final records → merge) in `testrun.py`; `make cycle TEST="nfm tx=ncm_raw …"` is hands-free | in progress | A separate `tools/nfmrun.py` (importing `testrun.py`'s console helpers) rather than more branches in `testrun.py`; `make nfmcycle NFM="…"`. The receiver was checked against a simulated sender (loss, a duplicate and a corrupted datagram were all counted), and the whole console round trip against a fake badge on a pty. Both were dry runs on the dev server, with no USB. |
 | 4.5 | **T5** matrix, **T10** in OBS | todo | Q1 answered here. |
 | **5** | **What streaming costs: the analysis runs** | | |
 | 5.1 | **T8** with `ncm_raw`: L2 frame time, streaming off / 15 / 30 fps | todo | |
@@ -559,6 +562,11 @@ claudeplans/nfmtest.md       this file
 | F-12 | USB IDs. Linux binds `cdc_ncm` by interface class, not by VID:PID, so any IDs work for testing. The launcher's `0x16D0:0x0F9A` must **not** be reused: BadgeLink tools match on it and would try to talk to the stream. Free sources of a real PID: **Espressif's usb-pids** (PIDs under VID `0x303A` for projects on Espressif chips, requested by pull request on GitHub), and **pid.codes** (PIDs under VID `0x1209` for open-source projects, also by pull request, with a few test PIDs anyone may use privately). | USB-IF VID policy; D-10 |
 | F-13 | FreeRTOS's static object structs change size with the config: `GENERATE_RUN_TIME_STATS` adds a counter to `StaticTask_t`; `USE_TRACE_FACILITY` adds fields to `StaticTask_t`, `StaticQueue_t` (= `StaticSemaphore_t`), `StaticEventGroup_t`, `StaticTimer_t` and `StaticStreamBuffer_t`. An app built with the smaller struct and passing it to `x…CreateStatic` makes the kernel write past its buffer: silent corruption. Dynamic creation is unaffected. No `tanmatsu-*-grace` app (nor `tanmatsu-simd-tests`) uses static creation, and no grace app uses the network either (grep, 2026-09-25). | `esp-idf v6.0.2 components/freertos/FreeRTOS-Kernel/include/freertos/FreeRTOS.h:1282-1454`; graceloader `sdkconfig_tanmatsu:3151,3155` (both off today) |
 
+| F-14 | TinyUSB's FreeRTOS OSAL creates its queue and semaphores **statically** (`xQueueCreateStatic`, `xSemaphoreCreate…Static`, because `configSUPPORT_STATIC_ALLOCATION` is on). So F-13's "no app uses static creation" no longer holds for this app. It is safe as long as nfmtest is built against headers that match the loader's FreeRTOS config: after G3 lands, rebuild against the synced template **before** running it on the new loader. | `components/tinyusb/src/osal/osal_freertos.h:44,195,231,258` |
+| F-15 | Graceloader exports neither `esp_read_mac`/`esp_efuse_mac_get_default` nor `esp_log_set_vprintf`. The MAC is read from the eFuse registers (`efuse_ll_get_mac0/1`, `EFUSE` is exported), and the console is kept quiet during the run with `esp_log_level_set("*", ESP_LOG_NONE)`. | `nm -D fakelib/liball.so` |
+| F-16 | FreeRTOS runs at 100 Hz here, so a `tud_task` that polls with a 1 ms timeout would really poll every 10 ms, or spin. Instead, TinyUSB's `tud_event_hook_cb` (called for every queued event, from the ISR too) wakes the usbnet task; it then runs `tud_task_ext(0)` and drains the TX ring. An IN transfer finishing is such an event, so a full NTB queue refills without waiting a tick. | `include/sdkconfig.h` `CONFIG_FREERTOS_HZ 100`; `usbd.c:432` |
+| F-17 | TinyUSB compiled for full speed (`CFG_TUD_MAX_SPEED=FULL`) and the launcher's high-speed build pick the same PHY on the OTG 1.1 controller: `dwc2_core_is_highspeed_phy()` returns false either way, because that core has no HS PHY. The launcher's working setup is therefore a valid reference for ours. | `dwc2_common.c:186-197` |
+
 ### Decisions
 
 | # | Decision | By / when |
@@ -572,10 +580,11 @@ claudeplans/nfmtest.md       this file
 | D-07 | Framebuffers are the display driver's three, flipped like SynthEngine3D 2.2, so the measurement sees a game's real conditions. Requires graceloader 2.6.0. | (proposed) |
 | D-08 | CPU share by soak tasks (M1.2, the reference for totals), plus FreeRTOS run-time stats for the per-task breakdown once G3 is in (M1.3). | (proposed); run-time stats by D-14 |
 | D-09 | Stream tasks on core 1 below SynthMiner's chunk worker priority; render on core 0. | (proposed) |
-| D-10 | USB IDs: a pid.codes **test PID** while this is a test app (F-12). If streaming ships in a game, request a PID from Espressif's usb-pids or pid.codes (this app is MIT). Never the launcher's `0x16D0:0x0F9A`. | (proposed) |
+| D-10 | USB IDs: a pid.codes **test PID** while this is a test app (F-12); implemented as `0x1209:0x0001`. If streaming ships in a game, request a PID from Espressif's usb-pids or pid.codes (this app is MIT). Never the launcher's `0x16D0:0x0F9A`. | (proposed) |
 | D-11 | Whether the encoder and TinyUSB move into graceloader for games is decided in 7.1, on these numbers. | open |
-| D-12 | DWC2 in slave mode first (F-09). | (proposed) |
+| D-12 | DWC2 in slave mode first (F-09). Implemented (`tusb_config.h`). | (proposed) |
 | D-13 | The graceloader exports (G1, G2) get added, synced to the template and committed in both, then pulled into the apps that need them, this one first. Graceloader is not pushed for it; the next release carries it. | The user, 2026-09-25 |
+| D-15 | `ncm_raw` has its own one-lease **DHCP server**: the PC always gets `192.168.77.1/24`, with no router and no DNS, and the badge is `192.168.77.2`. The laptop moves between networks, so the link must configure itself without touching the default route. NetworkManager's automatic profile picks it up; `setup_host_ncm.sh` and `nfmrecv.py --sudo-ip` are fallbacks for PCs with no DHCP client. | The user, 2026-09-25 |
 | D-14 | G3 is in: graceloader gets FreeRTOS run-time stats **and** the trace facility, with their exports. The static-struct size change (F-13) is accepted because the user is the only graceloader user and none of their apps create static FreeRTOS objects. | The user, 2026-09-25 |
 
 ---

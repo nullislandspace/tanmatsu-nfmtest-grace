@@ -1,6 +1,39 @@
-# Tanmatsu graceloader template app project
+# nfmtest: USB-C networking and H.264 screen streaming, measured
 
-This template project shows how to build an app for Tanmatsu using [Graceloader](https://github.com/nullislandspace/tanmatsu-graceloader)
+A measuring instrument for one question: can a graceloader game stream its screen
+(hardware H.264, MPEG-TS over UDP) into OBS on a Linux PC, and what does that cost
+the game? The plan, the findings and the status are in
+[`claudeplans/nfmtest.md`](claudeplans/nfmtest.md).
+
+## What works so far: the USB-C port as a network adapter
+
+The app turns the Tanmatsu's USB-C port into a CDC-NCM USB network adapter
+(TinyUSB, compiled into the app). Linux picks it up with its stock `cdc_ncm`
+driver as `enx<MAC>`.
+
+| | |
+|---|---|
+| Badge | `192.168.77.2`: answers ARP, ping, UDP echo (port 7) |
+| PC | `192.168.77.1/24`, handed out by the badge's own DHCP server, with **no router and no DNS**, so the PC's other networks are untouched |
+| Data | UDP to the PC's port 5000 (blast test), badge statistics once a second to port 5001, `STOP` to the badge's port 5002 ends a run |
+
+While the link is up, the USB-Serial-JTAG console (`/dev/ttyACM0`) is **gone**:
+the two share one full-speed PHY. The app swaps it back at the end of a run.
+
+**By hand:** start the app. On the badge, press Enter to blast for 30 s, `B` for
+5 minutes, or `I` for a link-only test (DHCP, ping). On the PC:
+
+```sh
+tools/nfmrecv.py --ping --echo 50      # waits for the interface, receives, checks
+```
+
+**Hands-free:** `make nfmcycle NFM="mode=blast secs=30"` builds, installs, starts
+the app, runs the test through the console round trip (`tools/nfmrun.py`) and
+writes `results/<UTC>-nfm-ncm-<mode>/result.json`. `make tscheck` runs the
+host-side tests of the network code, with no badge involved.
+
+If the PC runs no DHCP client on new interfaces, `tools/nfmrecv.py --sudo-ip`
+(or `tools/setup_host_ncm.sh --now`) sets the address by hand.
 
 ## 3D: SynthEngine3D
 
