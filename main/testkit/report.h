@@ -17,7 +17,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define REPORT_JSON_MAX 1536
+#define REPORT_JSON_MAX 2048
 
 // The record prefix, two or three letters, app-wide. Override it in the
 // app's CMakeLists (add_compile_definitions(REPORT_PREFIX="MG")) if two

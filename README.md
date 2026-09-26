@@ -35,6 +35,38 @@ host-side tests of the network code, with no badge involved.
 If the PC runs no DHCP client on new interfaces, `tools/nfmrecv.py --sudo-ip`
 (or `tools/setup_host_ncm.sh --now`) sets the address by hand.
 
+## Streaming the screen into OBS
+
+The badge encodes what it draws as H.264 (the hardware encoder, built into
+graceloader) and sends it as MPEG-TS over the USB network link. OBS plays it
+directly, with no server in between.
+
+**On the badge:** start the app and press **S**, which streams for 5 minutes.
+From the console, `RUN ncm mode=stream secs=<s> fps=<n> br=<kbit/s>
+gop=<frames> pat=<pattern>` sets the parameters. The defaults are 30 fps,
+3000 kbit/s, a keyframe every second and the `motion` test pattern. The
+display shows the frames being streamed; the frame counter on it, filmed next
+to OBS, gives the glass-to-glass latency.
+
+**On the PC:** wait until the `enx…` interface has `192.168.77.1`, as for the
+other network tests. Then, in OBS:
+
+1. Sources → **+** → **Media Source**, give it a name.
+2. Untick **Local File**.
+3. **Input:** `udp://@:5000`
+4. **Input Format:** `mpegts`
+5. OK.
+
+The picture appears within about a second of the link coming up, because
+the player waits for the next keyframe. For a quick check without OBS:
+`ffplay -fflags nobuffer udp://@:5000`.
+
+What is sent: 800×480 H.264 (Constrained Baseline) in MPEG-TS. PAT/PMT go
+before every keyframe; the PCR and the video are on PID 0x100; each frame
+starts with an access unit delimiter. Datagrams are 7 × 188 bytes and are
+sent as soon as a frame is encoded. The badge also sends one JSON statistics
+line per second to port 5001 (`tools/nfmrecv.py` prints them).
+
 ## 3D: SynthEngine3D
 
 [SynthEngine3D](https://github.com/nullislandspace/synthengine3D) is the 3D engine for

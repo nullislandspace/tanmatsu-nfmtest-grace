@@ -11,6 +11,7 @@
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "report.h"
+#include "stream.h"
 #include "testkit/debugcon.h"
 #include "usbnet.h"
 
@@ -19,7 +20,7 @@
 #define GEN_CORE  1
 
 #define PERIOD_MAX  600  // records kept (10 minutes)
-#define PERIOD_JSON 512
+#define PERIOD_JSON 768
 #define SD_DIR      "/sd/nfmtest"
 
 #define ACK_WINDOW_MS  20000
@@ -35,6 +36,9 @@ bool ncmtest_parse(char const* args, ncmtest_params_t* p, char* err, int err_len
     p->blast = true;
     p->secs  = 30;
     p->len   = 1316;
+    p->fps     = 30;
+    p->br_kbit = 3000;
+    p->pat     = PAT_MOTION;
     snprintf(p->run, sizeof(p->run), "r%08lx", (unsigned long)(esp_timer_get_time() & 0xffffffff));
 
     char buf[256];
@@ -54,8 +58,11 @@ bool ncmtest_parse(char const* args, ncmtest_params_t* p, char* err, int err_len
                 p->blast = true;
             } else if (strcmp(val, "idle") == 0) {
                 p->blast = false;
+            } else if (strcmp(val, "stream") == 0) {
+                p->blast  = false;
+                p->stream = true;
             } else {
-                snprintf(err, err_len, "mode is blast or idle, not '%s'", val);
+                snprintf(err, err_len, "mode is blast, idle or stream, not '%s'", val);
                 return false;
             }
         } else if (strcmp(key, "secs") == 0) {
@@ -73,6 +80,21 @@ bool ncmtest_parse(char const* args, ncmtest_params_t* p, char* err, int err_len
             p->len = (uint16_t)l;
         } else if (strcmp(key, "rate") == 0) {
             p->rate_kbit = (uint32_t)strtoul(val, NULL, 10);
+        } else if (strcmp(key, "fps") == 0) {
+            p->fps = atoi(val);
+            if (p->fps < 1 || p->fps > 60) {
+                snprintf(err, err_len, "fps must be 1..60");
+                return false;
+            }
+        } else if (strcmp(key, "br") == 0) {
+            p->br_kbit = (uint32_t)strtoul(val, NULL, 10);
+        } else if (strcmp(key, "gop") == 0) {
+            p->gop = atoi(val);
+        } else if (strcmp(key, "pat") == 0) {
+            if (!pattern_parse(val, &p->pat)) {
+                snprintf(err, err_len, "unknown pattern '%s'", val);
+                return false;
+            }
         } else if (strcmp(key, "poll") == 0) {
             p->poll = atoi(val) != 0;
         } else if (strcmp(key, "run") == 0) {
@@ -202,7 +224,27 @@ static void save_sd(char const* run, char const* start, char (*periods)[PERIOD_J
     fclose(f);
 }
 
-void ncmtest_run(ncmtest_params_t const* p, ncmtest_hud_t hud, bool console) {
+static char const* mode_name(ncmtest_params_t const* p) {
+    return p->stream ? "stream" : p->blast ? "blast" : "idle";
+}
+
+// Stream counters as JSON members (with a leading comma), or "".
+static void stream_json(char* out, size_t cap, stream_stats_t const* s, stream_stats_t const* prev, double dt) {
+    uint32_t const fr = s->frames - prev->frames;
+    snprintf(out, cap,
+             ",\"st_fps\":%.2f,\"st_kbit\":%.1f,\"st_frames\":%lu,\"st_skipped\":%lu,\"st_key\":%lu,"
+             "\"st_err\":%lu,\"st_dgram_fail\":%lu,\"st_rendered\":%lu,\"st_ppa_us\":%lu,\"st_enc_us\":%lu,"
+             "\"st_mux_us\":%lu,\"st_enc_max\":%lu",
+             fr / dt, (double)(s->ts_bytes - prev->ts_bytes) * 8 / dt / 1000, (unsigned long)s->frames,
+             (unsigned long)s->skipped, (unsigned long)s->keyframes, (unsigned long)s->enc_errors,
+             (unsigned long)s->dgrams_failed, (unsigned long)s->rendered,
+             fr ? (unsigned long)((s->ppa_us_sum - prev->ppa_us_sum) / fr) : 0UL,
+             fr ? (unsigned long)((s->enc_us_sum - prev->enc_us_sum) / fr) : 0UL,
+             fr ? (unsigned long)((s->mux_us_sum - prev->mux_us_sum) / fr) : 0UL, (unsigned long)s->enc_us_max);
+}
+
+void ncmtest_run(ncmtest_params_t const* p, ncmtest_hud_t hud, bool console, pax_buf_t const* fb,
+                 void (*blit)(void const* pixels)) {
     static char start_json[512];
     static char result_json[REPORT_JSON_MAX];
     char (*periods)[PERIOD_JSON] = heap_caps_calloc(PERIOD_MAX, PERIOD_JSON, MALLOC_CAP_SPIRAM);
@@ -223,17 +265,30 @@ void ncmtest_run(ncmtest_params_t const* p, ncmtest_hud_t hud, bool console) {
              "{\"run\":\"%s\",\"mode\":\"%s\",\"secs\":%d,\"len\":%u,\"rate\":%lu,\"host_mac\":\"%s\","
              "\"dev_mac\":\"%s\",\"host_ip\":\"192.168.77.1\",\"dev_ip\":\"192.168.77.2\",\"port\":%d,"
              "\"stats_port\":%d,\"ctrl_port\":%d,\"run_hash\":%lu,\"poll\":%d}",
-             p->run, p->blast ? "blast" : "idle", p->secs, (unsigned)p->len, (unsigned long)p->rate_kbit, s_mac_host,
+             p->run, mode_name(p), p->secs, (unsigned)p->len, (unsigned long)p->rate_kbit, s_mac_host,
              s_mac_dev, NCMTEST_PORT_DATA, NCMTEST_PORT_STATS, NCMTEST_PORT_CTRL, (unsigned long)fnv1a(p->run), p->poll ? 1 : 0);
     report_emit("START", start_json);
 
     char        l0[64], l1[64], l2[64], l3[64], l4[64], l5[64], l6[64], l7[64];
     char const* lines[] = {l0, l1, l2, l3, l4, l5, l6, l7};
-    snprintf(l0, sizeof(l0), "NCM %s%s  run %s", p->blast ? "blast" : "idle", p->poll ? " POLL" : "", p->run);
+    snprintf(l0, sizeof(l0), "NCM %s%s  run %s", mode_name(p), p->poll ? " POLL" : "", p->run);
     snprintf(l1, sizeof(l1), "PC side %s = 192.168.77.1", s_mac_host);
     snprintf(l2, sizeof(l2), "switching USB-C to network mode...");
     l3[0] = l4[0] = l5[0] = l6[0] = l7[0] = '\0';
     if (hud) hud(lines, 8);
+
+    // Stream: encoder, PPA and buffers before the console goes, so a
+    // failure still reaches the host.
+    if (p->stream) {
+        stream_cfg_t const sc  = {.fps = p->fps, .br_kbit = p->br_kbit, .gop = p->gop, .pat = p->pat};
+        esp_err_t const    err = stream_prepare(&sc, fb, blit);
+        if (err != ESP_OK) {
+            report_emitf("RESULT", "{\"run\":\"%s\",\"status\":\"error\",\"why\":\"stream_prepare: %s\"}", p->run,
+                         esp_err_to_name(err));
+            heap_caps_free(periods);
+            return;
+        }
+    }
 
     s_stop_requested   = false;
     int64_t const t_on = esp_timer_get_time();
@@ -244,9 +299,12 @@ void ncmtest_run(ncmtest_params_t const* p, ncmtest_hud_t hud, bool console) {
         snprintf(result_json, sizeof(result_json), "{\"run\":\"%s\",\"status\":\"error\",\"why\":\"usbnet_start: %s\"}",
                  p->run, esp_err_to_name(res));
         report_emit("RESULT", result_json);
+        if (p->stream) stream_stop();
         heap_caps_free(periods);
         return;
     }
+    if (p->stream) stream_start();
+    stream_stats_t sprev = {0};
 
     gen_t gen = {.p = p, .run_hash = fnv1a(p->run)};
     if (p->blast) xTaskCreatePinnedToCore(gen_task, "nfm_gen", GEN_STACK, &gen, GEN_PRIO, NULL, GEN_CORE);
@@ -280,6 +338,12 @@ void ncmtest_run(ncmtest_params_t const* p, ncmtest_hud_t hud, bool console) {
             uint64_t const deth = st.tx_bytes - prev.tx_bytes;
             double const   busy = (double)(st.task_busy_us - prev.task_busy_us) / (double)(now - t_prev) * 100.0;
             uint32_t const rej  = gen.rejected;
+            char           xs[300] = "";
+            stream_stats_t sst;
+            if (p->stream) {
+                stream_get_stats(&sst);
+                stream_json(xs, sizeof(xs), &sst, &sprev, dt);
+            }
             if (n_periods < PERIOD_MAX) {
                 char* j = periods[n_periods];
                 snprintf(j, PERIOD_JSON,
@@ -287,7 +351,7 @@ void ncmtest_run(ncmtest_params_t const* p, ncmtest_hud_t hud, bool console) {
                          "\"seq\":%lu,\"blocked\":%lu,\"ring_full\":%lu,\"no_link\":%lu,\"gen_rej\":%lu,\"peak\":%lu,"
                          "\"rx\":%lu,\"arp\":%lu,\"icmp\":%lu,\"dhcp\":%lu,\"udp_in\":%lu,\"ign\":%lu,\"bad\":%lu,"
                          "\"usb_busy_pct\":%.2f,\"wk_ev\":%lu,\"wk_to\":%lu,\"wk_poll\":%lu,\"hk_isr\":%lu,"
-                         "\"hk_task\":%lu,\"xfer\":%lu,\"sram\":%u,\"sram_big\":%u}",
+                         "\"hk_task\":%lu,\"xfer\":%lu,\"sram\":%u,\"sram_big\":%u%s}",
                          n_periods, (double)(now - t_on) / 1e6, st.mounted ? 1 : 0, (double)dudp * 8 / dt / 1e6,
                          (double)deth * 8 / dt / 1e6, (unsigned long)(st.tx_udp - prev.tx_udp), (unsigned long)gen.seq,
                          (unsigned long)(st.tx_blocked - prev.tx_blocked),
@@ -302,7 +366,7 @@ void ncmtest_run(ncmtest_params_t const* p, ncmtest_hud_t hud, bool console) {
                          (unsigned long)(st.hook_task - prev.hook_task),
                          (unsigned long)(st.xfer_complete - prev.xfer_complete),
                          (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-                         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+                         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL), xs);
                 usbnet_send_udp(NCMTEST_PORT_STATS, j, (uint16_t)strlen(j), 0);
                 n_periods++;
             }
@@ -315,6 +379,14 @@ void ncmtest_run(ncmtest_params_t const* p, ncmtest_hud_t hud, bool console) {
             snprintf(l7, sizeof(l7), "per s: hook isr %lu  task %lu  xfer done %lu",
                      (unsigned long)(st.hook_isr - prev.hook_isr), (unsigned long)(st.hook_task - prev.hook_task),
                      (unsigned long)(st.xfer_complete - prev.xfer_complete));
+            if (p->stream) {
+                snprintf(l6, sizeof(l6), "stream %.1f fps  %.0f kbit/s  skipped %lu  err %lu",
+                         (sst.frames - sprev.frames) / dt, (double)(sst.ts_bytes - sprev.ts_bytes) * 8 / dt / 1000,
+                         (unsigned long)sst.skipped, (unsigned long)sst.enc_errors);
+                snprintf(l7, sizeof(l7), "dgrams %lu  failed %lu  rendered %lu", (unsigned long)sst.dgrams,
+                         (unsigned long)sst.dgrams_failed, (unsigned long)sst.rendered);
+                sprev = sst;
+            }
             prev         = st;
             gen_rej_prev = rej;
             t_prev       = now;
@@ -327,12 +399,13 @@ void ncmtest_run(ncmtest_params_t const* p, ncmtest_hud_t hud, bool console) {
                      (unsigned long)st.net.rx_udp);
             snprintf(l5, sizeof(l5), "sent %lu  blocked %lu  full %lu  nolink %lu", (unsigned long)st.tx_udp,
                      (unsigned long)st.tx_blocked, (unsigned long)st.tx_ring_full, (unsigned long)st.tx_no_link);
-            if (hud) hud(lines, 8);
+            if (hud && !p->stream) hud(lines, 8);
             t_hud = now;
         }
         if (now >= t_end) break;
     }
 
+    if (p->stream) stream_stop();
     // Stop the generator, let the ring drain a moment, then take the link down.
     gen.stop = true;
     for (int i = 0; p->blast && !gen.done && i < 100; i++) vTaskDelay(pdMS_TO_TICKS(10));
@@ -345,7 +418,14 @@ void ncmtest_run(ncmtest_params_t const* p, ncmtest_hud_t hud, bool console) {
     ledger_take(&l_after);
 
     double const secs_run = (double)(t_down0 - t_up) / 1e6;
-    bool const   ok       = st.mounts > 0 && (!p->blast || st.tx_udp > 0);
+    stream_stats_t sfin = {0};
+    char           rs[300] = "";
+    if (p->stream) {
+        stream_stats_t const zero = {0};
+        stream_get_stats(&sfin);
+        stream_json(rs, sizeof(rs), &sfin, &zero, (double)(t_down0 - t_up) / 1e6);
+    }
+    bool const ok = st.mounts > 0 && (!p->blast || st.tx_udp > 0) && (!p->stream || sfin.frames > 0);
     char         lb[160], lu[160], la[160];
     ledger_json(lb, sizeof(lb), "before", &l_before);
     ledger_json(la, sizeof(la), "after", &l_after);
@@ -362,8 +442,8 @@ void ncmtest_run(ncmtest_params_t const* p, ncmtest_hud_t hud, bool console) {
              "\"peak\":%lu,\"rx\":%lu,\"rx_replies_dropped\":%lu,\"arp\":%lu,\"icmp\":%lu,\"dhcp\":%lu,"
              "\"dhcp_acked\":%lu,\"udp_in\":%lu,\"ign\":%lu,\"bad\":%lu,\"replies\":%lu,\"usb_busy_pct\":%.2f,"
              "\"poll\":%d,\"wk_ev\":%lu,\"wk_to\":%lu,\"wk_poll\":%lu,\"hk_isr\":%lu,\"hk_task\":%lu,\"xfer\":%lu,"
-             "\"periods\":%d,\"ledger\":{%s,%s,%s}}",
-             p->run, ok ? "ok" : "bad", p->blast ? "blast" : "idle", s_stop_requested ? 1 : 0, secs_run,
+             "\"periods\":%d%s,\"ledger\":{%s,%s,%s}}",
+             p->run, ok ? "ok" : "bad", mode_name(p), s_stop_requested ? 1 : 0, secs_run,
              (double)(t_up - t_on) / 1e3, (double)(t_down - t_down0) / 1e3, mount_us < 0 ? -1.0 : mount_us / 1e3,
              dhcp_us < 0 ? -1.0 : dhcp_us / 1e3, (unsigned long)st.mounts, (unsigned long)st.unmounts,
              st.peer_seen ? 1 : 0, (unsigned long)gen.seq, (unsigned long)st.tx_udp,
@@ -376,7 +456,7 @@ void ncmtest_run(ncmtest_params_t const* p, ncmtest_hud_t hud, bool console) {
              (unsigned long)st.net.rx_bad, (unsigned long)st.net.tx_replies,
              secs_run > 0 ? (double)st.task_busy_us / (secs_run * 1e4) : 0.0, p->poll ? 1 : 0,
              (unsigned long)st.wake_event, (unsigned long)st.wake_timeout, (unsigned long)st.wake_poll,
-             (unsigned long)st.hook_isr, (unsigned long)st.hook_task, (unsigned long)st.xfer_complete, n_periods, lb,
+             (unsigned long)st.hook_isr, (unsigned long)st.hook_task, (unsigned long)st.xfer_complete, n_periods, rs, lb,
              lu, la);
 
     save_sd(p->run, start_json, periods, n_periods, result_json);

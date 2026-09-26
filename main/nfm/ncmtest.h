@@ -2,7 +2,8 @@
 // =====================================================================
 //  ncmtest  --  steps 1.3/1.4, 4.2 and T5a: the USB network link alone
 // ---------------------------------------------------------------------
-//  RUN ncm [mode=blast|idle] [secs=30] [len=1316] [rate=<kbit/s>] [poll=0|1] [run=<id>]
+//  RUN ncm [mode=blast|idle|stream] [secs=30] [len=1316] [rate=<kbit/s>] [poll=0|1] [run=<id>]
+//          [fps=30] [br=<kbit/s>] [gop=<frames>] [pat=motion]     (stream)
 //
 //    mode=idle   bring the link up and keep it up: enumeration, DHCP,
 //                ping and UDP echo (port 7) are tested from the PC.
@@ -10,7 +11,11 @@
 //                port 5000, as fast as TinyUSB takes them (T5a, the USB
 //                ceiling) or at `rate` kbit/s of payload.
 //
-//  Every datagram starts with a 24-byte header the PC checks
+//    mode=stream the test pattern, H.264-encoded (graceloader's hardware
+//                encoder) and muxed into MPEG-TS, to the PC's port 5000:
+//                OBS Media Source udp://@:5000 plays it (stream.h).
+//
+//  Every blast datagram starts with a 24-byte header the PC checks
 //  (tools/nfmrecv.py): "NFMB", run id, sequence number, length, and the
 //  badge's microsecond clock; the rest is a pattern of the sequence
 //  number. Once a second a PERIOD record (JSON) goes to the PC's port
@@ -26,6 +31,8 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include "pattern.h"
+#include "pax_gfx.h"
 
 #define NCMTEST_PORT_DATA  5000
 #define NCMTEST_PORT_STATS 5001
@@ -37,6 +44,11 @@ typedef struct {
     uint16_t len;
     uint32_t rate_kbit;  // 0: as fast as possible
     bool     poll;       // usbnet task polls instead of sleeping (F-19)
+    bool     stream;     // mode=stream
+    int      fps;        // stream: frames per second
+    uint32_t br_kbit;    // stream: encoder bitrate
+    int      gop;        // stream: frames between keyframes (default fps)
+    pattern_t pat;       // stream: test pattern
     char     run[40];
 } ncmtest_params_t;
 
@@ -52,4 +64,7 @@ typedef void (*ncmtest_hud_t)(char const* const* lines, int n);
 // length of the run. `console` says whether a host is on the console to
 // ACK the final records (a RUN from the host) or not (started from the
 // keyboard: emit them once and return).
-void ncmtest_run(ncmtest_params_t const* p, ncmtest_hud_t hud, bool console);
+// `fb` is the app's framebuffer (stream mode copies its geometry), `blit`
+// shows a frame's pixels on the display (stream mode, may be NULL).
+void ncmtest_run(ncmtest_params_t const* p, ncmtest_hud_t hud, bool console, pax_buf_t const* fb,
+                 void (*blit)(void const* pixels));

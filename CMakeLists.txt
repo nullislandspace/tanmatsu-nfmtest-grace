@@ -16,6 +16,8 @@ set(APP_SOURCES
     main/nfm/ncmtest.c
     main/nfm/pattern.c
     main/nfm/enctest.c
+    main/nfm/tsmux.c
+    main/nfm/stream.c
 )
 
 # The test kit's console half (main/testkit/, README "Automated device

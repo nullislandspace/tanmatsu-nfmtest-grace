@@ -79,6 +79,7 @@ static void draw_menu(void) {
         "  I       link only for 120 s: DHCP, ping, echo",
         "  P       blast 30 s, usb task polling (F-19)",
         "  E       H.264: 150 frames of motion to SD (1.1/1.2)",
+        "  S       stream to OBS for 5 min: udp://@:5000 (mpegts)",
         "  F1      back to the launcher",
         "",
         "The console (/dev/ttyACM0) goes away while the",
@@ -92,6 +93,11 @@ static void draw_menu(void) {
         pax_draw_text(&s_fb, BLACK, pax_font_sky_mono, 18, 10, y, lines[i]);
     pax_draw_text(&s_fb, GREY, pax_font_sky_mono, 18, 10, y + 10, mac);
     blit();
+}
+
+// A finished stream frame on the display (stream mode's render task).
+static void blit_pixels(void const* pixels) {
+    bsp_display_blit(0, 0, s_h_res, s_v_res, pixels);
 }
 
 static void hud(char const* const* lines, int n) {
@@ -108,7 +114,7 @@ static void run_ncm(char const* args, bool console) {
         return;
     }
     s_state = "ncm";
-    ncmtest_run(&p, hud, console);
+    ncmtest_run(&p, hud, console, &s_fb, blit_pixels);
     s_state = "menu";
 }
 
@@ -156,6 +162,8 @@ static void handle_key(bsp_input_event_t const* ev) {
             case 'I': args = "mode=idle secs=120"; break;
             case 'p':
             case 'P': args = "mode=blast secs=30 poll=1"; break;
+            case 's':
+            case 'S': args = "mode=stream secs=300 fps=30 br=3000"; break;
             case 'e':
             case 'E':
                 debugcon_set_busy(true);
