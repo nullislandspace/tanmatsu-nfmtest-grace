@@ -2,7 +2,7 @@
 // =====================================================================
 //  ncmtest  --  steps 1.3/1.4, 4.2 and T5a: the USB network link alone
 // ---------------------------------------------------------------------
-//  RUN ncm [mode=blast|idle] [secs=30] [len=1316] [rate=<kbit/s>] [run=<id>]
+//  RUN ncm [mode=blast|idle] [secs=30] [len=1316] [rate=<kbit/s>] [poll=0|1] [run=<id>]
 //
 //    mode=idle   bring the link up and keep it up: enumeration, DHCP,
 //                ping and UDP echo (port 7) are tested from the PC.
@@ -36,6 +36,7 @@ typedef struct {
     int      secs;
     uint16_t len;
     uint32_t rate_kbit;  // 0: as fast as possible
+    bool     poll;       // usbnet task polls instead of sleeping (F-19)
     char     run[40];
 } ncmtest_params_t;
 

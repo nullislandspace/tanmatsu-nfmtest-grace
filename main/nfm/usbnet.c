@@ -12,6 +12,7 @@
 #include "esp_timer.h"
 #include "hal/efuse_ll.h"
 #include "hal/usb_serial_jtag_ll.h"
+#include "device/dcd.h"
 #include "tusb.h"
 
 // --- configuration -----------------------------------------------------------
@@ -69,6 +70,7 @@ static volatile bool     s_stop;
 static volatile bool     s_init_ok;
 static volatile bool     s_running;
 static volatile bool     s_mounted;
+static bool              s_poll;
 
 // Ring of UDP payloads: producers advance head under s_prod, the task
 // advances tail. Indices run freely; the slot is index % RING_N.
@@ -203,13 +205,15 @@ void tud_umount_cb(void) {
 // an IN transfer finished and NTBs are free again.
 void tud_event_hook_cb(uint8_t rhport, uint32_t eventid, bool in_isr) {
     (void)rhport;
-    (void)eventid;
     if (s_wake == NULL) return;
+    if (eventid == DCD_EVENT_XFER_COMPLETE) s_st.xfer_complete++;
     if (in_isr) {
+        s_st.hook_isr++;
         BaseType_t woken = pdFALSE;
         xSemaphoreGiveFromISR(s_wake, &woken);
         portYIELD_FROM_ISR(woken);
     } else {
+        s_st.hook_task++;
         xSemaphoreGive(s_wake);
     }
 }
@@ -305,6 +309,16 @@ static void usbnet_task(void* arg) {
     (void)arg;
     // Initialised here, so the controller's interrupt is allocated on
     // this task's core, and freed on it again by tusb_deinit().
+    //
+    // Double-buffer the bulk IN endpoint's TX FIFO (F-18). In slave mode
+    // TinyUSB gives it room for exactly one 64-byte packet, so after each
+    // packet the host's next IN token is NAKed until our ISR has written
+    // the next one: the first blast measured 5.27 Mbit/s of ~9.4 possible.
+    // Two packets let the ISR refill one while the other goes out.
+    tud_configure_param_t const cfg = {
+        .dwc2 = {.bm_double_buffered = 1u << (EP_IN & 0x0f), .vbus_sensing = CFG_TUD_VBUS_DETECT_HW},
+    };
+    tud_configure(0, TUD_CFGID_DWC2, &cfg);
     tusb_rhport_init_t const init = {.role = TUSB_ROLE_DEVICE, .speed = TUSB_SPEED_FULL};
     s_init_ok                     = tusb_rhport_init(0, &init);
     xSemaphoreGive(s_done);
@@ -314,7 +328,14 @@ static void usbnet_task(void* arg) {
     }
 
     while (!s_stop) {
-        xSemaphoreTake(s_wake, WAKE_TICKS);
+        if (s_poll) {
+            taskYIELD();  // lower-priority tasks on this core starve; equal ones share
+            s_st.wake_poll++;
+        } else if (xSemaphoreTake(s_wake, WAKE_TICKS) == pdTRUE) {
+            s_st.wake_event++;
+        } else {
+            s_st.wake_timeout++;
+        }
         int64_t const t0 = esp_timer_get_time();
         tud_task_ext(0, false);  // everything queued, without blocking
         drain();
@@ -344,7 +365,7 @@ static void free_all(void) {
     s_replies = NULL;
 }
 
-esp_err_t usbnet_start(usbnet_udp_cb_t on_udp) {
+esp_err_t usbnet_start(usbnet_udp_cb_t on_udp, bool poll) {
     if (s_running) return ESP_ERR_INVALID_STATE;
 
     s_ring    = heap_caps_calloc(RING_N, sizeof(slot_t), MALLOC_CAP_SPIRAM);
@@ -361,6 +382,7 @@ esp_err_t usbnet_start(usbnet_udp_cb_t on_udp) {
     s_reply_head = s_reply_tail = 0;
     memset(&s_st, 0, sizeof(s_st));
     s_on_udp  = on_udp;
+    s_poll    = poll;
     s_stop    = false;
     s_mounted = false;
 
@@ -392,7 +414,11 @@ esp_err_t usbnet_start(usbnet_udp_cb_t on_udp) {
     esp_err_t res = usb_new_phy(&phy_conf, &s_phy);
     if (res != ESP_OK) goto fail_phy;
 
-    if (xTaskCreatePinnedToCore(usbnet_task, "usbnet", TASK_STACK, NULL, TASK_PRIO, &s_task, TASK_CORE) != pdPASS) {
+    // Polling runs at idle priority: it shares core 1 round-robin with the
+    // idle task (so the watchdog stays fed), and the generator (priority 5,
+    // same core) preempts it whenever it has data to queue.
+    UBaseType_t const prio = poll ? tskIDLE_PRIORITY : TASK_PRIO;
+    if (xTaskCreatePinnedToCore(usbnet_task, "usbnet", TASK_STACK, NULL, prio, &s_task, TASK_CORE) != pdPASS) {
         res = ESP_ERR_NO_MEM;
         goto fail_task;
     }

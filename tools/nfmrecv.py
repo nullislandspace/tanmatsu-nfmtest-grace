@@ -255,7 +255,8 @@ class Receiver:
             print(f"  badge t={rec.get('t', 0):6.1f}s mounted={rec.get('mounted')} udp {rec.get('udp_mbit', 0):6.3f} "
                   f"Mbit/s  blocked {rec.get('blocked')}  full {rec.get('ring_full')}  usb task "
                   f"{rec.get('usb_busy_pct', 0):5.1f}%  rx {rec.get('rx')} ping {rec.get('icmp')} "
-                  f"dhcp {rec.get('dhcp')}")
+                  f"dhcp {rec.get('dhcp')}  wake ev/to/poll {rec.get('wk_ev')}/{rec.get('wk_to')}/"
+                  f"{rec.get('wk_poll')}  xfer {rec.get('xfer')}")
 
     def _tick(self, now):
         if self._sec_start is not None and now - self._sec_start >= 1.0:

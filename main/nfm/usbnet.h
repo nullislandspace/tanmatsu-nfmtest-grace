@@ -51,6 +51,14 @@ typedef struct {
     uint32_t rx_replies_dropped;  // a reply (ARP/ICMP/DHCP) found its queue full
     // the usbnet task's own CPU time (tud_task + ring drain), microseconds
     uint64_t task_busy_us;
+    // Why the task ran (F-18/F-19): woken by an event, by its tick timeout,
+    // or polled; and what TinyUSB queued, from its ISR or from a task.
+    uint32_t wake_event;
+    uint32_t wake_timeout;
+    uint32_t wake_poll;
+    uint32_t hook_isr;
+    uint32_t hook_task;
+    uint32_t xfer_complete;  // DCD_EVENT_XFER_COMPLETE, all endpoints
     netraw_stats_t net;
     bool           peer_seen;
 } usbnet_stats_t;
@@ -65,7 +73,9 @@ typedef void (*usbnet_udp_cb_t)(netraw_udp_t const* udp);
 // Available before usbnet_start().
 void usbnet_macs(uint8_t host[6], uint8_t dev[6]);
 
-esp_err_t usbnet_start(usbnet_udp_cb_t on_udp);
+// `poll`: the task never sleeps on its semaphore but yields and runs
+// again (an experiment: does the wake-up path limit the rate? F-19).
+esp_err_t usbnet_start(usbnet_udp_cb_t on_udp, bool poll);
 void      usbnet_stop(void);
 bool      usbnet_running(void);
 

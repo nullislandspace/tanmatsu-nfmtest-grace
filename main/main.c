@@ -75,6 +75,7 @@ static void draw_menu(void) {
         "  Enter   blast UDP for 30 s (USB ceiling, T5a)",
         "  B       blast UDP for 5 minutes",
         "  I       link only for 120 s: DHCP, ping, echo",
+        "  P       blast 30 s, usb task polling (F-19)",
         "  F1      back to the launcher",
         "",
         "The console (/dev/ttyACM0) goes away while the",
@@ -144,6 +145,8 @@ static void handle_key(bsp_input_event_t const* ev) {
             case 'B': args = "mode=blast secs=300"; break;
             case 'i':
             case 'I': args = "mode=idle secs=120"; break;
+            case 'p':
+            case 'P': args = "mode=blast secs=30 poll=1"; break;
             default: break;
         }
     }

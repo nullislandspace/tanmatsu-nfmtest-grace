@@ -73,6 +73,8 @@ bool ncmtest_parse(char const* args, ncmtest_params_t* p, char* err, int err_len
             p->len = (uint16_t)l;
         } else if (strcmp(key, "rate") == 0) {
             p->rate_kbit = (uint32_t)strtoul(val, NULL, 10);
+        } else if (strcmp(key, "poll") == 0) {
+            p->poll = atoi(val) != 0;
         } else if (strcmp(key, "run") == 0) {
             strlcpy(p->run, val, sizeof(p->run));
         } else {
@@ -220,22 +222,22 @@ void ncmtest_run(ncmtest_params_t const* p, ncmtest_hud_t hud, bool console) {
     snprintf(start_json, sizeof(start_json),
              "{\"run\":\"%s\",\"mode\":\"%s\",\"secs\":%d,\"len\":%u,\"rate\":%lu,\"host_mac\":\"%s\","
              "\"dev_mac\":\"%s\",\"host_ip\":\"192.168.77.1\",\"dev_ip\":\"192.168.77.2\",\"port\":%d,"
-             "\"stats_port\":%d,\"ctrl_port\":%d,\"run_hash\":%lu}",
+             "\"stats_port\":%d,\"ctrl_port\":%d,\"run_hash\":%lu,\"poll\":%d}",
              p->run, p->blast ? "blast" : "idle", p->secs, (unsigned)p->len, (unsigned long)p->rate_kbit, s_mac_host,
-             s_mac_dev, NCMTEST_PORT_DATA, NCMTEST_PORT_STATS, NCMTEST_PORT_CTRL, (unsigned long)fnv1a(p->run));
+             s_mac_dev, NCMTEST_PORT_DATA, NCMTEST_PORT_STATS, NCMTEST_PORT_CTRL, (unsigned long)fnv1a(p->run), p->poll ? 1 : 0);
     report_emit("START", start_json);
 
-    char        l0[64], l1[64], l2[64], l3[64], l4[64], l5[64];
-    char const* lines[] = {l0, l1, l2, l3, l4, l5};
-    snprintf(l0, sizeof(l0), "NCM %s  run %s", p->blast ? "blast" : "idle", p->run);
+    char        l0[64], l1[64], l2[64], l3[64], l4[64], l5[64], l6[64], l7[64];
+    char const* lines[] = {l0, l1, l2, l3, l4, l5, l6, l7};
+    snprintf(l0, sizeof(l0), "NCM %s%s  run %s", p->blast ? "blast" : "idle", p->poll ? " POLL" : "", p->run);
     snprintf(l1, sizeof(l1), "PC side %s = 192.168.77.1", s_mac_host);
     snprintf(l2, sizeof(l2), "switching USB-C to network mode...");
-    l3[0] = l4[0] = l5[0] = '\0';
-    if (hud) hud(lines, 6);
+    l3[0] = l4[0] = l5[0] = l6[0] = l7[0] = '\0';
+    if (hud) hud(lines, 8);
 
     s_stop_requested   = false;
     int64_t const t_on = esp_timer_get_time();
-    esp_err_t const res = usbnet_start(on_udp);
+    esp_err_t const res = usbnet_start(on_udp, p->poll);
     int64_t const t_up = esp_timer_get_time();
     if (res != ESP_OK) {
         // The console is back already (usbnet_start undoes its steps).
@@ -284,7 +286,8 @@ void ncmtest_run(ncmtest_params_t const* p, ncmtest_hud_t hud, bool console) {
                          "{\"i\":%d,\"t\":%.3f,\"mounted\":%d,\"udp_mbit\":%.3f,\"eth_mbit\":%.3f,\"udp\":%lu,"
                          "\"seq\":%lu,\"blocked\":%lu,\"ring_full\":%lu,\"no_link\":%lu,\"gen_rej\":%lu,\"peak\":%lu,"
                          "\"rx\":%lu,\"arp\":%lu,\"icmp\":%lu,\"dhcp\":%lu,\"udp_in\":%lu,\"ign\":%lu,\"bad\":%lu,"
-                         "\"usb_busy_pct\":%.2f,\"sram\":%u,\"sram_big\":%u}",
+                         "\"usb_busy_pct\":%.2f,\"wk_ev\":%lu,\"wk_to\":%lu,\"wk_poll\":%lu,\"hk_isr\":%lu,"
+                         "\"hk_task\":%lu,\"xfer\":%lu,\"sram\":%u,\"sram_big\":%u}",
                          n_periods, (double)(now - t_on) / 1e6, st.mounted ? 1 : 0, (double)dudp * 8 / dt / 1e6,
                          (double)deth * 8 / dt / 1e6, (unsigned long)(st.tx_udp - prev.tx_udp), (unsigned long)gen.seq,
                          (unsigned long)(st.tx_blocked - prev.tx_blocked),
@@ -293,13 +296,25 @@ void ncmtest_run(ncmtest_params_t const* p, ncmtest_hud_t hud, bool console) {
                          (unsigned long)st.ring_peak, (unsigned long)(st.rx_frames - prev.rx_frames),
                          (unsigned long)st.net.rx_arp, (unsigned long)st.net.rx_icmp, (unsigned long)st.net.rx_dhcp,
                          (unsigned long)st.net.rx_udp, (unsigned long)st.net.rx_ignored, (unsigned long)st.net.rx_bad,
-                         busy, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                         busy, (unsigned long)(st.wake_event - prev.wake_event),
+                         (unsigned long)(st.wake_timeout - prev.wake_timeout),
+                         (unsigned long)(st.wake_poll - prev.wake_poll), (unsigned long)(st.hook_isr - prev.hook_isr),
+                         (unsigned long)(st.hook_task - prev.hook_task),
+                         (unsigned long)(st.xfer_complete - prev.xfer_complete),
+                         (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                          (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
                 usbnet_send_udp(NCMTEST_PORT_STATS, j, (uint16_t)strlen(j), 0);
                 n_periods++;
             }
             snprintf(l3, sizeof(l3), "%s  %.2f Mbit/s UDP  usb task %.1f%%", st.mounted ? "mounted" : "waiting for host",
                      (double)dudp * 8 / dt / 1e6, busy);
+            snprintf(l6, sizeof(l6), "per s: wake ev %lu  timeout %lu  poll %lu",
+                     (unsigned long)(st.wake_event - prev.wake_event),
+                     (unsigned long)(st.wake_timeout - prev.wake_timeout),
+                     (unsigned long)(st.wake_poll - prev.wake_poll));
+            snprintf(l7, sizeof(l7), "per s: hook isr %lu  task %lu  xfer done %lu",
+                     (unsigned long)(st.hook_isr - prev.hook_isr), (unsigned long)(st.hook_task - prev.hook_task),
+                     (unsigned long)(st.xfer_complete - prev.xfer_complete));
             prev         = st;
             gen_rej_prev = rej;
             t_prev       = now;
@@ -312,7 +327,7 @@ void ncmtest_run(ncmtest_params_t const* p, ncmtest_hud_t hud, bool console) {
                      (unsigned long)st.net.rx_udp);
             snprintf(l5, sizeof(l5), "sent %lu  blocked %lu  full %lu  nolink %lu", (unsigned long)st.tx_udp,
                      (unsigned long)st.tx_blocked, (unsigned long)st.tx_ring_full, (unsigned long)st.tx_no_link);
-            if (hud) hud(lines, 6);
+            if (hud) hud(lines, 8);
             t_hud = now;
         }
         if (now >= t_end) break;
@@ -346,6 +361,7 @@ void ncmtest_run(ncmtest_params_t const* p, ncmtest_hud_t hud, bool console) {
              "\"tx_bytes\":%llu,\"udp_mbit\":%.3f,\"blocked\":%lu,\"ring_full\":%lu,\"no_link\":%lu,\"gen_rej\":%lu,"
              "\"peak\":%lu,\"rx\":%lu,\"rx_replies_dropped\":%lu,\"arp\":%lu,\"icmp\":%lu,\"dhcp\":%lu,"
              "\"dhcp_acked\":%lu,\"udp_in\":%lu,\"ign\":%lu,\"bad\":%lu,\"replies\":%lu,\"usb_busy_pct\":%.2f,"
+             "\"poll\":%d,\"wk_ev\":%lu,\"wk_to\":%lu,\"wk_poll\":%lu,\"hk_isr\":%lu,\"hk_task\":%lu,\"xfer\":%lu,"
              "\"periods\":%d,\"ledger\":{%s,%s,%s}}",
              p->run, ok ? "ok" : "bad", p->blast ? "blast" : "idle", s_stop_requested ? 1 : 0, secs_run,
              (double)(t_up - t_on) / 1e3, (double)(t_down - t_down0) / 1e3, mount_us < 0 ? -1.0 : mount_us / 1e3,
@@ -358,14 +374,17 @@ void ncmtest_run(ncmtest_params_t const* p, ncmtest_hud_t hud, bool console) {
              (unsigned long)st.net.rx_arp, (unsigned long)st.net.rx_icmp, (unsigned long)st.net.rx_dhcp,
              (unsigned long)st.net.dhcp_acked, (unsigned long)st.net.rx_udp, (unsigned long)st.net.rx_ignored,
              (unsigned long)st.net.rx_bad, (unsigned long)st.net.tx_replies,
-             secs_run > 0 ? (double)st.task_busy_us / (secs_run * 1e4) : 0.0, n_periods, lb, lu, la);
+             secs_run > 0 ? (double)st.task_busy_us / (secs_run * 1e4) : 0.0, p->poll ? 1 : 0,
+             (unsigned long)st.wake_event, (unsigned long)st.wake_timeout, (unsigned long)st.wake_poll,
+             (unsigned long)st.hook_isr, (unsigned long)st.hook_task, (unsigned long)st.xfer_complete, n_periods, lb,
+             lu, la);
 
     save_sd(p->run, start_json, periods, n_periods, result_json);
 
     snprintf(l2, sizeof(l2), "done: %s, console back", ok ? "ok" : "BAD");
     snprintf(l3, sizeof(l3), "%.2f Mbit/s UDP avg, %lu datagrams", secs_run > 0 ? (double)st.tx_udp_bytes * 8 / secs_run / 1e6 : 0.0,
              (unsigned long)st.tx_udp);
-    if (hud) hud(lines, 6);
+    if (hud) hud(lines, 8);
 
     // The host needs a moment to find /dev/ttyACM0 again; then repeat
     // until it says it has everything.
