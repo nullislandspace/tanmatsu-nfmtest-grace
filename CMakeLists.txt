@@ -14,6 +14,8 @@ set(APP_SOURCES
     main/nfm/netraw.c
     main/nfm/usbnet.c
     main/nfm/ncmtest.c
+    main/nfm/pattern.c
+    main/nfm/enctest.c
 )
 
 # The test kit's console half (main/testkit/, README "Automated device
@@ -22,6 +24,7 @@ set(APP_SOURCES
 list(APPEND APP_SOURCES
     main/testkit/debugcon.c
     main/testkit/report.c
+    main/testkit/screenshot.c
 )
 add_compile_definitions(REPORT_PREFIX="NFM" TESTKIT_NO_ENGINE SCREENSHOT_DIR="/sd/nfmtest")
 
@@ -67,6 +70,7 @@ set(TINYUSB_SOURCES
     components/tinyusb/src/portable/synopsys/dwc2/dwc2_common.c
 )
 list(APPEND APP_SOURCES ${TINYUSB_SOURCES})
+
 set_source_files_properties(${TINYUSB_SOURCES} PROPERTIES
     COMPILE_OPTIONS "-Wno-unused-parameter;-Wno-sign-compare;-Wno-type-limits;-Wno-missing-field-initializers")
 

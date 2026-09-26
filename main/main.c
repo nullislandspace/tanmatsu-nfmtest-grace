@@ -20,7 +20,9 @@
 #include "bsp/display.h"
 #include "bsp/input.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "gl_input.h"
+#include "nfm/enctest.h"
 #include "nfm/ncmtest.h"
 #include "nfm/usbnet.h"
 #include "nvs_flash.h"
@@ -76,6 +78,7 @@ static void draw_menu(void) {
         "  B       blast UDP for 5 minutes",
         "  I       link only for 120 s: DHCP, ping, echo",
         "  P       blast 30 s, usb task polling (F-19)",
+        "  E       H.264: 150 frames of motion to SD (1.1/1.2)",
         "  F1      back to the launcher",
         "",
         "The console (/dev/ttyACM0) goes away while the",
@@ -123,6 +126,12 @@ static void handle_command(char const* line) {
         leave();
         return;
     }
+    if (strncmp(line, "RUN enc", 7) == 0 && (line[7] == '\0' || line[7] == ' ')) {
+        s_state = "enc";
+        enctest_run(line + 7, &s_fb, blit);
+        leave();
+        return;
+    }
     if (strncmp(line, "RUN ", 4) == 0) {
         report_emitf("RESULT", "{\"status\":\"error\",\"why\":\"unknown test: %s\"}", line + 4);
         debugcon_set_busy(false);
@@ -147,6 +156,17 @@ static void handle_key(bsp_input_event_t const* ev) {
             case 'I': args = "mode=idle secs=120"; break;
             case 'p':
             case 'P': args = "mode=blast secs=30 poll=1"; break;
+            case 'e':
+            case 'E':
+                debugcon_set_busy(true);
+                s_state = "enc";
+                enctest_run("frames=150 pat=motion", &s_fb, blit);
+                s_state = "menu";
+                debugcon_set_busy(false);
+                vTaskDelay(pdMS_TO_TICKS(2000));
+                xQueueReset(s_input);
+                draw_menu();
+                return;
             default: break;
         }
     }
@@ -194,7 +214,16 @@ void app_main(void) {
         case BSP_DISPLAY_ROTATION_270: orientation = PAX_O_ROT_CW; break;
         default: break;
     }
-    pax_buf_init(&s_fb, NULL, s_h_res, s_v_res, format);
+    // Our own framebuffer, RGB565 as the games use (the BSP was asked for
+    // 565 above), 64-byte aligned in PSRAM so the PPA can read it
+    // straight after a cache write-back (enctest).
+    size_t const bpp    = format == PAX_BUF_16_565RGB ? 2 : 3;
+    void* const  fb_mem = heap_caps_aligned_calloc(64, 1, s_h_res * s_v_res * bpp, MALLOC_CAP_SPIRAM);
+    if (fb_mem == NULL) {
+        ESP_LOGE(TAG, "no memory for the framebuffer");
+        return;
+    }
+    pax_buf_init(&s_fb, fb_mem, s_h_res, s_v_res, format);
     pax_buf_reversed(&s_fb, s_endian == BSP_DISPLAY_ENDIAN_BIG);
     pax_buf_set_orientation(&s_fb, orientation);
 

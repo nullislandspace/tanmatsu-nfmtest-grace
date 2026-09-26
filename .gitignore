@@ -12,3 +12,4 @@ esp-idf-tools
 esp-idf
 build-host/
 __pycache__/
+results/
